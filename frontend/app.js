@@ -85,18 +85,43 @@ function cardEl(t) {
   return card;
 }
 
-// Baseline adds nothing; features override to add pills/chips.
-function cardExtras(_t) {
-  return [];
+// Due dates + tags (mid-course project): pills/chips shown on each card.
+function cardExtras(t) {
+  const extras = [];
+  if (t.due_date) {
+    const cls = t.overdue ? "pill overdue" : "pill due-date";
+    const label = t.overdue ? "Overdue " : "Due ";
+    extras.push(`<span class="${cls}">${label}${escapeHtml(t.due_date)}</span>`);
+  }
+  for (const tag of t.tags || []) {
+    extras.push(`<span class="pill tag">${escapeHtml(tag)}</span>`);
+  }
+  return extras;
 }
 
-// Baseline modal has no extra fields; features inject inputs into #feature-fields.
-function renderFeatureFields(_t) {
-  document.getElementById("feature-fields").innerHTML = "";
+// Due dates + tags: inject the two extra inputs into the modal form.
+function renderFeatureFields(t) {
+  const container = document.getElementById("feature-fields");
+  container.innerHTML = `
+    <label>Due date
+      <input id="f-due-date" type="date" />
+    </label>
+    <label>Tags <span class="hint">(comma-separated)</span>
+      <input id="f-tags" type="text" placeholder="e.g. backend, urgent" />
+    </label>
+  `;
+  document.getElementById("f-due-date").value = (t && t.due_date) || "";
+  document.getElementById("f-tags").value = t && t.tags ? t.tags.join(", ") : "";
 }
 
-function collectFeatureFields(_payload) {
-  // Features add their values to the payload here.
+function collectFeatureFields(payload) {
+  const due = document.getElementById("f-due-date").value;
+  payload.due_date = due || null;
+  const tagsRaw = document.getElementById("f-tags").value;
+  payload.tags = tagsRaw
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
 }
 
 function openModal(task = null) {
@@ -166,6 +191,21 @@ form.addEventListener("submit", async (e) => {
 document.getElementById("new-task-btn").onclick = () => openModal();
 document.getElementById("cancel-btn").onclick = closeModal;
 backdrop.addEventListener("click", (e) => { if (e.target === backdrop) closeModal(); });
+
+// Toolbar filters: tag search + overdue-only toggle.
+let tagFilterTimer;
+document.getElementById("tag-filter").addEventListener("input", (e) => {
+  clearTimeout(tagFilterTimer);
+  const value = e.target.value.trim();
+  tagFilterTimer = setTimeout(() => {
+    filters.tag = value || undefined;
+    loadBoard();
+  }, 200);
+});
+document.getElementById("overdue-filter").addEventListener("change", (e) => {
+  filters.overdue = e.target.checked ? "true" : undefined;
+  loadBoard();
+});
 
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({
