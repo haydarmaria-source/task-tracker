@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-from .db import get_conn, init_db, now_iso, row_to_dict
+from .db import get_conn, init_db, now_iso, row_to_dict, today_iso
 from .models import Status, Priority, Task, TaskCreate, TaskUpdate
 
 
@@ -35,9 +35,32 @@ def health() -> dict:
     return {"status": "ok"}
 
 
+def _tags_from_csv(raw: str | None) -> list[str]:
+    if not raw:
+        return []
+    return [t for t in (part.strip() for part in raw.split(",")) if t]
+
+
+def _tags_to_csv(tags: list[str]) -> str:
+    return ",".join(tags)
+
+
+def _to_task_dict(row: dict) -> dict:
+    """Turn a raw DB row (tags stored as CSV) into the API shape (tags as a
+    list, plus a computed `overdue` flag). Overdue is computed here rather
+    than stored, so it's always correct relative to "today" instead of
+    going stale between writes.
+    """
+    task = dict(row)
+    task["tags"] = _tags_from_csv(task.get("tags"))
+    due = task.get("due_date")
+    task["overdue"] = bool(due) and task["status"] != Status.done.value and due < today_iso()
+    return task
+
+
 def _fetch_task(conn, task_id: int) -> dict | None:
     row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
-    return row_to_dict(row) if row else None
+    return _to_task_dict(row_to_dict(row)) if row else None
 
 
 @app.post("/tasks", response_model=Task, status_code=201)
@@ -47,8 +70,8 @@ def create_task(payload: TaskCreate) -> dict:
         cur = conn.execute(
             """
             INSERT INTO tasks (title, description, status, priority, assignee,
-                               created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+                               due_date, tags, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 payload.title,
@@ -56,6 +79,8 @@ def create_task(payload: TaskCreate) -> dict:
                 payload.status.value,
                 payload.priority.value,
                 payload.assignee,
+                payload.due_date,
+                _tags_to_csv(payload.tags),
                 ts,
                 ts,
             ),
@@ -69,6 +94,8 @@ def list_tasks(
     status: Status | None = None,
     priority: Priority | None = None,
     assignee: str | None = None,
+    tag: str | None = None,
+    overdue: bool | None = None,
 ) -> list[dict]:
     clauses, params = [], []
     if status is not None:
@@ -85,7 +112,16 @@ def list_tasks(
         rows = conn.execute(
             f"SELECT * FROM tasks{where} ORDER BY id", params
         ).fetchall()
-        return [row_to_dict(r) for r in rows]
+        tasks = [_to_task_dict(row_to_dict(r)) for r in rows]
+
+    # tag/overdue are computed (tags is CSV, overdue depends on "today"), so
+    # they're filtered in Python after the SQL query rather than in SQL.
+    if tag is not None:
+        tag_norm = tag.strip().lower()
+        tasks = [t for t in tasks if tag_norm in [x.lower() for x in t["tags"]]]
+    if overdue is not None:
+        tasks = [t for t in tasks if t["overdue"] == overdue]
+    return tasks
 
 
 @app.get("/tasks/{task_id}", response_model=Task)
@@ -109,6 +145,8 @@ def update_task(task_id: int, payload: TaskUpdate) -> dict:
             for key, value in fields.items():
                 if isinstance(value, (Status, Priority)):
                     value = value.value
+                elif key == "tags":
+                    value = _tags_to_csv(value)
                 sets.append(f"{key} = ?")
                 params.append(value)
             sets.append("updated_at = ?")
