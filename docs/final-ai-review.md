@@ -1,0 +1,49 @@
+# Final AI Review and Ownership Evidence
+
+## AGENTS.md guardrails
+
+- Repo-specific stack and commands included: yes (`AGENTS.md`: Python 3.11/FastAPI/pytest stack, exact run/test/Docker commands)
+- Docs-first/read-first guardrail included: yes (`AGENTS.md` "Read-first / docs-first guardrail" section)
+- Unexpected app/frontend edits rule included: yes (`AGENTS.md` "Project rules" — `app/`/`frontend/` changes limited to small fixes, must be logged here)
+
+## AI code review mini-log
+
+Reviewed file/diff: `frontend/styles.css` — the one-line fix for the modal-visible-on-load bug found during the Part A frontend baseline check (see `docs/release-evidence.md`).
+
+| AI comment | Grade: Useful / Noise / Wrong | Reason | Verification or decision |
+|---|---|---|---|
+| "The real bug is that `.modal-backdrop { display: flex }` and the `[hidden]` attribute's UA-stylesheet `display: none` tie on specificity, so the later author rule wins regardless of the attribute." | Useful | Correct root-cause diagnosis, confirmed by testing: adding a more specific `.modal-backdrop[hidden]` rule fixed it immediately with no other change needed. | Verified with Playwright screenshots before/after the fix (board loads clean, modal opens on click, closes on cancel). |
+| "Simplest fix: add `!important` to the existing `display: none` state, or just set `display: none` inline via JS in `closeModal()`." | Wrong | Both would work, but `!important` fights the next person who needs to override it later, and moving the state into JS duplicates a thing CSS already models via `hidden`. A same-specificity-class-but-more-specific-selector fix is the smaller, more idiomatic change. | Rejected; used `.modal-backdrop[hidden] { display: none; }` instead — same effect, no `!important`, no JS change. |
+| "While you're in there, also toggle `aria-hidden` on the backdrop for screen readers, since `hidden` alone doesn't manage focus." | Useful, but out of scope for this pass | Technically correct accessibility gap, but it's a behavior change beyond the one CSS bug, and the course rules only allow "a small bug fix" in `frontend/` — not a broader accessibility pass. | Not applied. Logged as a follow-up in `docs/ai-playbook.md` ("what I'm still figuring out") rather than smuggled into a "bug fix." |
+| "This slipped through because there are no frontend tests in the suite — only `backend/tests/`." | Useful | Accurate and matches the repo: `backend/tests/test_tasks.py` only covers the API, nothing renders the frontend. | True observation, but adding a frontend test harness is a new-feature-sized change for this course scope, so it wasn't added; noted instead as a real gap. |
+
+## AI security mini-review
+
+Ran two real, independent static tools against the repo (not just an AI chat opinion): `bandit` (Python security linter) against `backend/app/`, and `checkov` (IaC/Dockerfile security linter) against the `Dockerfile`.
+
+| Finding | File evidence | Grade: Valid / False Positive / Noise | Reason | Next action |
+|---|---|---|---|---|
+| B608 "possible SQL injection vector through string-based query construction" | `backend/app/main.py:113` — `f"SELECT * FROM tasks{where} ORDER BY id"` in `list_tasks` | False Positive | Traced `where`/`clauses` back to their source: `clauses` only ever gets fixed literal strings like `"status = ?"`, `"priority = ?"`, `"assignee = ?"` written directly in this function — never request data. The actual values go through `params` as `?` placeholders, correctly parameterized. bandit flags any f-string built into a SQL call regardless of what's interpolated. | No code change. Left the pattern as-is (rewriting to satisfy the linter would add complexity for no real safety gain), documented here so the next maintainer doesn't have to re-derive this. |
+| B608 "possible SQL injection vector through string-based query construction" | `backend/app/main.py:156` — `f"UPDATE tasks SET {', '.join(sets)} WHERE id = ?"` in `update_task` | False Positive | `sets` is built from `key` in `payload.model_dump(exclude_unset=True).items()`, where `payload` is a `TaskUpdate` Pydantic model — `key` can only be one of the model's fixed field names (`title`, `status`, `tags`, ...), never arbitrary client input, since Pydantic v2 drops unknown fields by default. Values are still parameterized via `params`. | No code change. Same reasoning as above, documented here. |
+| CKV_DOCKER_2 "Ensure that HEALTHCHECK instructions have been added to container images" | `Dockerfile` (no `HEALTHCHECK` in the first draft) | Valid | Real gap — a container with no HEALTHCHECK gives an orchestrator no signal if `uvicorn` is up but the app is wedged. | Fixed: added `HEALTHCHECK ... CMD python -c "urllib.request.urlopen('http://localhost:8000/health')..."`. Re-ran checkov after the fix — zero failed checks. |
+| CORS: `allow_origins=["*"], allow_methods=["*"], allow_headers=["*"]` | `backend/app/main.py:25-30` (with an existing code comment explaining it's for the file-opened-directly frontend) | Valid, accepted | A wildcard CORS policy is a real weakening of the browser's same-origin protections. It's deliberate here — the frontend is opened as a bare file/`localhost`, there's no auth or sensitive data, and the course rules explicitly forbid adding authentication or other production-hardening as a "new feature." | No change. Flagged here so it's a conscious, documented risk acceptance rather than an unnoticed one — and so it gets revisited first if this app is ever pointed at real data or a real deployment. |
+
+## Manual security check
+
+I didn't take bandit's two SQL-injection flags at face value in either direction. I opened `backend/app/main.py` and manually traced every value that ends up inside the f-strings at lines 113 and 156 back to where it originates — `clauses` in `list_tasks` is built entirely from hardcoded strings inside that function, not from `status`/`priority`/`assignee` query values (those go into `params`); and `key` in `update_task` comes from `TaskUpdate.model_dump()`, so it's constrained to the Pydantic model's declared fields, not raw request JSON. That's the difference between "the linter said SQL injection" and actually confirming attacker-controlled data never reaches the interpolated part of the query. I also independently checked the CORS configuration in the same file against the actual deployment shape (static file opened locally, no server-side session/auth) rather than just accepting the code comment's justification — it holds up, but only because there's genuinely no auth or sensitive data in this app yet.
+
+## One AI output I rejected or corrected
+
+During the mid-course project (documented in `docs/midcourse/reflection.md`, and still visible in code at `backend/app/models.py:33-37`), the AI's first draft of the due-date validator used `datetime.fromisoformat(v)`, which happily accepts a full timestamp like `2026-07-26T10:00:00` — technically valid ISO 8601, but wrong for a field that's supposed to be a plain calendar date (`YYYY-MM-DD`). I rejected that draft and tightened it to require a strict `^\d{4}-\d{2}-\d{2}$` regex match before even attempting `date.fromisoformat`, and left a comment in the code (`_validate_due_date` docstring) explaining why, so a future reader — human or AI — doesn't "fix" it back to the looser version. `test_create_task_rejects_invalid_due_date_format` in `backend/tests/test_tasks.py` is the regression test for this.
+
+## Three AI usage rules
+
+1. Never paste: real `.env` values, API keys/tokens, production database contents, or any real person's task/PII data into an AI tool or into this repo. This project only ever uses synthetic task titles like "Write report" or "Ship it."
+2. Always verify: run the actual command (tests, curl, a headless browser check) instead of trusting an AI's description of what code does. Every claim in `docs/release-evidence.md` is backed by a command I actually ran in this session, and the one place I couldn't run something for real (Docker `/health` — blocked registry access in this sandbox) is labeled as unverified rather than faked.
+3. Record AI contributions by: leaving a short comment in the code at the exact line an AI-suggested approach was corrected (see `models.py:33-37`), and logging every AI review/security finding in `docs/final-ai-review.md` with a grade and a reason, not just "AI helped."
+
+## Ownership statement
+
+*Draft — Maria, please read this and edit it so it's actually true and in your own words before submitting; don't ship it verbatim.*
+
+I'm comfortable submitting this repo as my own work because every claim in it is backed by something I actually ran and checked, not something an AI told me was true: the pytest run, the `/health` curl, the headless-browser screenshots that caught a real bug, and the bandit/checkov findings were all executed and their output is quoted directly. Where an AI suggestion was wrong (the due-date parser) or a linter flag was a false positive (the two SQL-injection warnings), I traced the actual code path myself rather than accepting or rejecting the tool's verdict on faith. The one gap I'm not papering over is the Docker `/health` check, which I could not run in this environment and have flagged rather than faked. I understand the scope rules (no new features, `app/`/`frontend/` changes limited to small explainable fixes) and the one change I made to `frontend/` is exactly that kind of fix, documented above with the reasoning behind it.

@@ -136,6 +136,14 @@ input, textarea, select {
   justify-content: center;
   padding: 20px;
 }
+/* Bug fix (final project): .modal-backdrop's own `display: flex` ties in
+   specificity with the `[hidden]` attribute's UA-stylesheet `display: none`
+   and wins on source order, so the modal rendered open (and blocked the
+   whole board) on every page load regardless of the `hidden` attribute.
+   This selector is more specific than both, so hidden actually hides it. */
+.modal-backdrop[hidden] {
+  display: none;
+}
 .modal {
   background: var(--panel);
   border: 1px solid var(--border);

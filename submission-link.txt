@@ -1,0 +1,4 @@
+Mid-Course Project: AI-Assisted Feature Extension Sprint
+
+Repository: https://github.com/haydarmaria-source/task-tracker
+Branch: mid-course-project
