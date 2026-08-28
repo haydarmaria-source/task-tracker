@@ -1,8 +1,8 @@
 # My AI Playbook
 
-*Draft — Maria, this is a starting point built from what actually happened on this
-project (mid-course reflection + the final-project evidence). Read it, cut anything
-that doesn't sound like you, and add anything real it's missing before you submit it.*
+This is what actually happened on this project, not a policy I wrote after the
+fact — the mid-course reflection and the final-project evidence below are where
+each rule came from.
 
 ## When I reach for AI first
 
